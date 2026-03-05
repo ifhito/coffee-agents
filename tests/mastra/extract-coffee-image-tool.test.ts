@@ -80,6 +80,43 @@ describe('extractCoffeeFromImageTool', () => {
     expect(mockHeicConvert).not.toHaveBeenCalled();
   });
 
+  it('画像のみ送信時でも既定のOCR指示をテキストに含める', async () => {
+    process.env.OCR_PROVIDER = 'ollama';
+    mockGenerateObject.mockResolvedValueOnce({ object: validExtracted });
+
+    const { extractCoffeeFromImageTool } = await import('../../src/mastra/tools/ocr/extract-coffee-image-tool');
+
+    const result = await extractCoffeeFromImageTool.execute({
+      context: { imageBase64: 'data:image/jpeg;base64,abc123' },
+    });
+
+    expect(result.success).toBe(true);
+    const textPart = mockGenerateObject.mock.calls[0]?.[0]?.messages?.[0]?.content?.find(
+      (p: { type: string; text?: string }) => p.type === 'text',
+    );
+    expect(textPart?.text).toContain('画像を読み取ってください');
+  });
+
+  it('OCR指示文を渡した場合はプロンプトに反映される', async () => {
+    process.env.OCR_PROVIDER = 'ollama';
+    mockGenerateObject.mockResolvedValueOnce({ object: validExtracted });
+
+    const { extractCoffeeFromImageTool } = await import('../../src/mastra/tools/ocr/extract-coffee-image-tool');
+
+    const result = await extractCoffeeFromImageTool.execute({
+      context: {
+        imageBase64: 'data:image/jpeg;base64,abc123',
+        ocrInstruction: '画像を読み取ってください。豆名を必ず探してください。',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const textPart = mockGenerateObject.mock.calls[0]?.[0]?.messages?.[0]?.content?.find(
+      (p: { type: string; text?: string }) => p.type === 'text',
+    );
+    expect(textPart?.text).toContain('豆名を必ず探してください');
+  });
+
   describe('ingestionInputSchema MIMEタイプバリデーション', () => {
     const baseInput = { user_id: '00000000-0000-0000-0000-000000000000', is_public: false };
 
@@ -108,6 +145,15 @@ describe('extractCoffeeFromImageTool', () => {
         imageBase64: 'data:image/bmp;base64,abc123',
       });
       expect(result.success).toBe(false);
+    });
+
+    it('ocr_instruction を指定してもバリデーションに通る', () => {
+      const result = ingestionInputSchema.safeParse({
+        ...baseInput,
+        imageBase64: 'data:image/jpeg;base64,abc123',
+        ocr_instruction: '画像を読み取ってください',
+      });
+      expect(result.success).toBe(true);
     });
   });
 
@@ -174,6 +220,44 @@ describe('extractCoffeeFromImageTool', () => {
     expect(result.message).toContain('Internal Server Error');
     expect(result.message).toContain('Ollamaの再起動');
     expect(result.message).toContain('モデル再pull');
+  });
+
+  it('Timeout系エラーが続く場合はTimeoutヒントを返す', async () => {
+    process.env.OCR_PROVIDER = 'ollama';
+    process.env.OCR_MODEL = 'qwen2.5vl';
+    process.env.OLLAMA_BASE_URL = 'http://localhost:11434/api';
+
+    mockGenerateObject.mockRejectedValue(new Error('Gateway Timeout'));
+
+    const { extractCoffeeFromImageTool } = await import('../../src/mastra/tools/ocr/extract-coffee-image-tool');
+
+    const result = await extractCoffeeFromImageTool.execute({
+      context: { imageBase64: 'data:image/jpeg;base64,abc123' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.extracted).toBeNull();
+    expect(result.message).toContain('OCRエラー: Timeout');
+    expect(result.message).toContain('画像サイズ縮小');
+  });
+
+  it('構造化失敗時は再試行ガイダンスを返す', async () => {
+    process.env.OCR_PROVIDER = 'ollama';
+    process.env.OCR_MODEL = 'qwen2.5vl';
+    process.env.OLLAMA_BASE_URL = 'http://localhost:11434/api';
+
+    mockGenerateObject.mockRejectedValue(new Error('No object generated: response did not match schema'));
+
+    const { extractCoffeeFromImageTool } = await import('../../src/mastra/tools/ocr/extract-coffee-image-tool');
+
+    const result = await extractCoffeeFromImageTool.execute({
+      context: { imageBase64: 'data:image/jpeg;base64,abc123' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.extracted).toBeNull();
+    expect(result.message).toContain('構造化に失敗');
+    expect(result.message).toContain('手入力');
   });
 
   it('Internal Server Error と Not Found が混在しても Internal Server Error を優先する', async () => {

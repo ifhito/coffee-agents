@@ -1,4 +1,5 @@
 import type { OcrResult } from '../types';
+import { toErrorMessage } from './httpError';
 
 export type ExtractedCoffee = {
   bean_name: string | null;
@@ -24,16 +25,21 @@ export async function extractImageForReview(
   imageBase64: string,
   userId: string,
   isPublic: boolean,
+  ocrInstruction?: string,
 ): Promise<ExtractResult> {
   const response = await fetch(`${baseUrl}/api/coffee/ocr/extract`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ imageBase64, user_id: userId, is_public: isPublic }),
+    body: JSON.stringify({
+      imageBase64,
+      user_id: userId,
+      is_public: isPublic,
+      ...(ocrInstruction ? { ocr_instruction: ocrInstruction } : {}),
+    }),
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    throw new Error(await toErrorMessage(response));
   }
 
   return (await response.json()) as ExtractResult;
@@ -51,8 +57,7 @@ export async function confirmOcrInsert(
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    throw new Error(await toErrorMessage(response));
   }
 
   return (await response.json()) as OcrResult;

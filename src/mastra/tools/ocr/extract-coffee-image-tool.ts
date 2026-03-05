@@ -8,6 +8,7 @@ import { extractedCoffeeSchema } from '../../lib/ocr-types.js';
 
 const DEFAULT_OCR_MODEL = 'qwen2.5vl:7b';
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/api';
+const DEFAULT_OCR_INSTRUCTION = '画像を読み取ってください。コーヒーラベルの情報を抽出してください。';
 const VISION_MODEL_FALLBACKS = ['qwen2.5vl:7b', 'qwen2.5vl:latest', 'qwen2.5vl', 'minicpm-v'];
 
 function isNotFoundError(err: unknown): boolean {
@@ -20,8 +21,18 @@ function isInternalServerError(err: unknown): boolean {
   return /internal server error|500/i.test(message);
 }
 
+function isTimeoutError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /timeout|timed out|gateway timeout|aborted|econnreset|etimedout|socket hang up/i.test(message);
+}
+
+function isSchemaGenerationError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /no object generated|did not match schema|validation|json/i.test(message);
+}
+
 function isRecoverableOllamaError(err: unknown): boolean {
-  return isNotFoundError(err) || isInternalServerError(err);
+  return isNotFoundError(err) || isInternalServerError(err) || isTimeoutError(err) || isSchemaGenerationError(err);
 }
 
 function getOllamaBaseURLCandidates(rawBaseUrl: string | undefined): string[] {
@@ -110,6 +121,7 @@ export const extractCoffeeFromImageTool = createTool({
   description: 'コーヒー画像からOCRでテキストを抽出し、構造化JSONに変換する',
   inputSchema: z.object({
     imageBase64: z.string().describe('data URL形式の画像 (data:image/jpeg;base64,...)'),
+    ocrInstruction: z.string().trim().min(1).max(500).optional(),
   }),
   outputSchema: z.object({
     success:   z.boolean(),
@@ -119,6 +131,7 @@ export const extractCoffeeFromImageTool = createTool({
   execute: async ({ context }) => {
     const openAiModel = getOpenAiVisionModel();
     let ollamaImage: Uint8Array | null = null;
+    const ocrInstruction = context.ocrInstruction?.trim() || DEFAULT_OCR_INSTRUCTION;
     const systemPrompt = `
 あなたはコーヒーのラベル・パッケージ・レシートの画像からテキストを読み取り、
 指定されたJSONスキーマに従ってデータを抽出するAIです。
@@ -127,6 +140,7 @@ export const extractCoffeeFromImageTool = createTool({
 画像内に記載がない場合は null にしてください。
 roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark' のいずれかに正規化してください。
 `.trim();
+    const promptText = `${systemPrompt}\n\n追加指示:\n${ocrInstruction}`;
 
     try {
       if (!openAiModel) {
@@ -139,12 +153,12 @@ roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'
         const { object } = await generateObject({
           model: openAiModel,
           schema: extractedCoffeeSchema,
-          maxRetries: 0,
+          maxRetries: 2,
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: systemPrompt },
+                { type: 'text', text: promptText },
                 { type: 'image', image: context.imageBase64 },
               ],
             },
@@ -158,6 +172,8 @@ roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'
       let lastError: unknown;
       const attempted: Array<{ model: string; baseURL: string }> = [];
       const internalErrors: string[] = [];
+      const timeoutErrors: string[] = [];
+      const validationErrors: string[] = [];
 
       for (const baseURL of baseUrlCandidates) {
         for (const modelName of modelCandidates) {
@@ -167,12 +183,12 @@ roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'
             const { object } = await generateObject({
               model,
               schema: extractedCoffeeSchema,
-              maxRetries: 0,
+              maxRetries: 2,
               messages: [
                 {
                   role: 'user',
                   content: [
-                    { type: 'text', text: systemPrompt },
+                    { type: 'text', text: promptText },
                     { type: 'image', image: ollamaImage! },
                   ],
                 },
@@ -183,6 +199,12 @@ roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'
             lastError = err;
             if (isInternalServerError(err)) {
               internalErrors.push(err instanceof Error ? err.message : String(err));
+            }
+            if (isTimeoutError(err)) {
+              timeoutErrors.push(err instanceof Error ? err.message : String(err));
+            }
+            if (isSchemaGenerationError(err)) {
+              validationErrors.push(err instanceof Error ? err.message : String(err));
             }
             if (!isRecoverableOllamaError(err)) {
               throw err;
@@ -201,6 +223,31 @@ roast_level は '浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'
             `OCRエラー: Internal Server Error (model=${configuredModel})。` +
             `詳細: ${lastInternal}。` +
             'Ollamaの再起動、モデル再pull、画像サイズ縮小を試してください。',
+        };
+      }
+
+      if (timeoutErrors.length > 0) {
+        const configuredModel = process.env.OCR_MODEL ?? DEFAULT_OCR_MODEL;
+        const lastTimeout = timeoutErrors[timeoutErrors.length - 1];
+        return {
+          success: false,
+          extracted: null,
+          message:
+            `OCRエラー: Timeout (model=${configuredModel})。` +
+            `詳細: ${lastTimeout}。` +
+            '画像サイズ縮小、Ollama再起動、しばらく待って再試行を試してください。',
+        };
+      }
+
+      if (validationErrors.length > 0) {
+        const lastValidation = validationErrors[validationErrors.length - 1];
+        return {
+          success: false,
+          extracted: null,
+          message:
+            'OCRエラー: 抽出結果の構造化に失敗しました。' +
+            `詳細: ${lastValidation}。` +
+            '別画像で再試行するか、確認画面で手入力してください。',
         };
       }
 

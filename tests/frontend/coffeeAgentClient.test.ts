@@ -26,6 +26,17 @@ describe('coffeeAgentClient', () => {
     await expect(sendMessage('hello')).rejects.toThrow('server error');
   });
 
+  it('parses error message from JSON HTTP error body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 504,
+      text: async () => JSON.stringify({ error: 'Gateway Timeout' }),
+    });
+    globalThis.fetch = fetchMock;
+
+    await expect(sendMessage('hello')).rejects.toThrow('Gateway Timeout');
+  });
+
   it('throws when response is missing text', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

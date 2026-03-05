@@ -23,7 +23,10 @@ const ocrStep = createStep({
   }),
   execute: async ({ inputData }) => {
     const result = await extractCoffeeFromImageTool.execute({
-      context: { imageBase64: inputData.imageBase64 },
+      context: {
+        imageBase64: inputData.imageBase64,
+        ocrInstruction: inputData.ocr_instruction,
+      },
     });
     return {
       ...result,

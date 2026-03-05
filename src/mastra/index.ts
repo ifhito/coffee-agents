@@ -6,9 +6,14 @@ import { coffeeComparisonWorkflow } from './workflows/coffee-comparison-workflow
 import { coffeeIngestionWorkflow } from './workflows/coffee-ingestion-workflow';
 import { ingestionInputSchema } from './lib/ocr-types';
 import { handleCoffeeOcrExtract, handleCoffeeOcrConfirm } from './api/ocr-handlers';
+import { isOperationTimeoutError, parseTimeoutMs, runWithTimeout } from './lib/timeout';
 import { weatherAgent } from './agents/weather-agent';
 import { OllamaAgent } from './agents/mcpAgent';
 import { coffeeAgent } from './agents/coffee-agent';
+
+const COFFEE_CHAT_TIMEOUT_MS = parseTimeoutMs(process.env.COFFEE_CHAT_TIMEOUT_MS, 120_000);
+const OCR_INGEST_TIMEOUT_MS = parseTimeoutMs(process.env.OCR_INGEST_TIMEOUT_MS, 120_000);
+const SERVER_TIMEOUT_MS = parseTimeoutMs(process.env.MASTRA_SERVER_TIMEOUT_MS, 5 * 60 * 1000);
 
 const handleCoffeeOcrIngest = async (c: {
   req: { json: () => Promise<unknown> };
@@ -22,11 +27,20 @@ const handleCoffeeOcrIngest = async (c: {
   }
 
   try {
-    const run = await coffeeIngestionWorkflow.createRunAsync();
-    const result = await run.start({ inputData: parsed.data });
+    const result = await runWithTimeout('OCR取込処理', OCR_INGEST_TIMEOUT_MS, async () => {
+      const run = await coffeeIngestionWorkflow.createRunAsync();
+      return run.start({ inputData: parsed.data });
+    });
     const output = result.results?.['db-insert'] ?? result.results?.['ocr-extract'];
     return c.json(output ?? { inserted: false, reason: 'ワークフロー結果が取得できませんでした' });
   } catch (err) {
+    if (isOperationTimeoutError(err)) {
+      return c.json({
+        inserted: false,
+        extracted: null,
+        reason: `${err.message}。画像サイズを小さくして再試行してください。`,
+      });
+    }
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: message }, 500);
   }
@@ -43,9 +57,9 @@ const handleCoffeeRequest = async (c: {
 
   try {
     // generateLegacy を使用（ollama-ai-provider用）
-    const response = await coffeeAgent.generateLegacy(userMessage, {
+    const response = await runWithTimeout('チャット応答生成', COFFEE_CHAT_TIMEOUT_MS, () => coffeeAgent.generateLegacy(userMessage, {
       maxSteps: 10,
-    });
+    }));
 
     // ツール呼び出しのログ出力
     if (response.steps && response.steps.length > 0) {
@@ -79,6 +93,12 @@ const handleCoffeeRequest = async (c: {
       },
     });
   } catch (error) {
+    if (isOperationTimeoutError(error)) {
+      return c.json({
+        text: `処理がタイムアウトしました。${error.message}。質問を短くするか、しばらく待って再試行してください。`,
+      });
+    }
+
     console.error('❌ Error:', error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     return c.json({ error: errorMessage }, 500);
@@ -98,6 +118,7 @@ export const mastra = new Mastra({
   }),
   server: {
     port: 4111, // ポートを固定
+    timeout: SERVER_TIMEOUT_MS,
     apiRoutes: [
       {
         path: '/api/coffee/chat',

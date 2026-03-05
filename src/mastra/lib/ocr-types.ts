@@ -47,6 +47,7 @@ export const ingestionInputSchema = z.object({
       },
       '対応していない画像フォーマットです。JPEG・PNG・WebP・GIF・HEICのみ使用できます',
     ),
+  ocr_instruction: z.string().trim().min(1).max(500).optional(),
   user_id:   z.string().uuid(),
   is_public: z.boolean().default(false),
 });

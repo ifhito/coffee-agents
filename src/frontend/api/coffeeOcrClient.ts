@@ -1,4 +1,5 @@
 import type { OcrResult } from '../types';
+import { toErrorMessage } from './httpError';
 
 const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
 const ALLOWED_MIME_TYPES = [
@@ -44,18 +45,23 @@ export async function sendImageForOcr(
   imageBase64: string,
   userId: string,
   isPublic: boolean,
+  ocrInstruction?: string,
 ): Promise<OcrResult> {
   const response = await fetch(`${baseUrl}/api/coffee/ocr/ingest`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ imageBase64, user_id: userId, is_public: isPublic }),
+    body: JSON.stringify({
+      imageBase64,
+      user_id: userId,
+      is_public: isPublic,
+      ...(ocrInstruction ? { ocr_instruction: ocrInstruction } : {}),
+    }),
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    throw new Error(await toErrorMessage(response));
   }
 
   return (await response.json()) as OcrResult;

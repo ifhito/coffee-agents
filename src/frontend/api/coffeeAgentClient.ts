@@ -1,4 +1,5 @@
 import type { AgentResponse } from '../types';
+import { toErrorMessage } from './httpError';
 
 type RawAgentResponse = {
   text?: string;
@@ -25,8 +26,7 @@ export async function sendMessage(message: string, threadId?: string): Promise<A
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    throw new Error(await toErrorMessage(response));
   }
 
   const data = (await response.json()) as RawAgentResponse;
