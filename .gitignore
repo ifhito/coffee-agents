@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment files (keep sample)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build and test artifacts
+dist/
+build/
+coverage/
+.vitest/
+
+# Runtime/cache artifacts
+.mastra/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Tooling/local config
+.claude/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
