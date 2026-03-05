@@ -3,15 +3,17 @@ import type { ExtractedCoffee } from '../api/coffeeOcrReviewClient';
 
 type OcrReviewModalProps = {
   extracted: ExtractedCoffee;
-  onConfirm: (edited: ExtractedCoffee) => void;
+  userId: string;
+  onConfirm: (edited: ExtractedCoffee, userId: string) => void;
   onCancel: () => void;
   isSubmitting: boolean;
 };
 
 const ROAST_LEVELS = ['浅煎り', '中煎り', '深煎り', 'light', 'medium', 'dark'] as const;
 
-export function OcrReviewModal({ extracted, onConfirm, onCancel, isSubmitting }: OcrReviewModalProps) {
+export function OcrReviewModal({ extracted, userId: initialUserId, onConfirm, onCancel, isSubmitting }: OcrReviewModalProps) {
   const [form, setForm] = useState<ExtractedCoffee>(extracted);
+  const [userId, setUserId] = useState(initialUserId);
 
   const setField = <K extends keyof ExtractedCoffee>(key: K, value: ExtractedCoffee[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -23,7 +25,7 @@ export function OcrReviewModal({ extracted, onConfirm, onCancel, isSubmitting }:
     return Math.min(5, Math.max(1, n));
   };
 
-  const canSubmit = Boolean(form.bean_name?.trim()) && form.overall_rating !== null;
+  const canSubmit = Boolean(form.bean_name?.trim()) && form.overall_rating !== null && Boolean(userId.trim());
 
   return (
     <div style={styles.overlay}>
@@ -32,6 +34,17 @@ export function OcrReviewModal({ extracted, onConfirm, onCancel, isSubmitting }:
         <p style={styles.hint}>内容を確認・編集してから登録してください。</p>
 
         <div style={styles.fields}>
+          <Field label="ユーザーID *">
+            <input
+              style={styles.input}
+              type="text"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              disabled={isSubmitting}
+              placeholder="Supabase auth.users の UUID を入力"
+            />
+          </Field>
+
           <Field label="豆名 *">
             <input
               style={styles.input}
@@ -126,7 +139,7 @@ export function OcrReviewModal({ extracted, onConfirm, onCancel, isSubmitting }:
           </button>
           <button
             style={{ ...styles.confirmBtn, ...((!canSubmit || isSubmitting) ? styles.disabledBtn : {}) }}
-            onClick={() => onConfirm(form)}
+            onClick={() => onConfirm(form, userId)}
             disabled={!canSubmit || isSubmitting}
           >
             {isSubmitting ? '登録中…' : '登録する'}

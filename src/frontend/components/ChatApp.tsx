@@ -8,6 +8,8 @@ import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
 import { OcrReviewModal } from './OcrReviewModal';
 
+const DEFAULT_OCR_INSTRUCTION = '画像を読み取ってください。コーヒーラベル情報を抽出してください。';
+
 const initialMessages: ChatMessage[] = [
   {
     id: 'welcome',
@@ -80,7 +82,8 @@ export function ChatApp() {
     try {
       const imageBase64 = await fileToBase64(file);
       const userId = getOrCreateUserId();
-      const result = await extractImageForReview(imageBase64, userId, false);
+      const instruction = text?.trim() || DEFAULT_OCR_INSTRUCTION;
+      const result = await extractImageForReview(imageBase64, userId, false, instruction);
       if (result.success && result.extracted) {
         setPendingReview({ extracted: result.extracted, userId, isPublic: false });
       } else {
@@ -101,11 +104,11 @@ export function ChatApp() {
     }
   };
 
-  const handleReviewConfirm = async (editedExtracted: ExtractedCoffee) => {
+  const handleReviewConfirm = async (editedExtracted: ExtractedCoffee, userId: string) => {
     if (!pendingReview) return;
     setIsConfirming(true);
     try {
-      const result = await confirmOcrInsert(editedExtracted, pendingReview.userId, pendingReview.isPublic);
+      const result = await confirmOcrInsert(editedExtracted, userId, pendingReview.isPublic);
       setPendingReview(null);
       setMessages((prev) => [
         ...prev,
@@ -145,6 +148,7 @@ export function ChatApp() {
       {pendingReview && (
         <OcrReviewModal
           extracted={pendingReview.extracted}
+          userId={pendingReview.userId}
           onConfirm={handleReviewConfirm}
           onCancel={handleReviewCancel}
           isSubmitting={isConfirming}
